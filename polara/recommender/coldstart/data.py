@@ -1,3 +1,4 @@
+
 from collections import namedtuple, defaultdict
 import numpy as np
 
@@ -8,12 +9,13 @@ from polara.recommender.hybrid.data import (IdentityDiagonalMixin,
 
 
 class ItemColdStartData(RecommenderData):
-    def __init__(self, *args, item_features=None, **kwargs):
+    def __init__(self, *args, **kwargs):
+        self.meta_data = kwargs.pop('meta_data', None)
         super(ItemColdStartData, self).__init__(*args, **kwargs)
-        self.item_features = item_features
+
         self._test_ratio = 0.2
         self._warm_start = False
-        self._holdout_size = -1
+        self._holdout_size = -1  # needed for correct processing of test data
 
         # build unique items list to split them by folds
         itemid = self.fields.itemid
@@ -22,17 +24,6 @@ class ItemColdStartData(RecommenderData):
 
         self._test_sample = None # fraction of representative users from train
         self._repr_users = None
-
-    @property
-    def holdout_size(self):
-        return -1
-
-    @holdout_size.setter
-    def holdout_size(self, new_value):
-        if new_value == 0: # enable setting test data
-            self._holdout_size = 0
-        else:
-            raise NotImplementedError('Setting holdout size is currently not supported in item cold start.')
 
     @property
     def representative_users(self):
@@ -66,13 +57,15 @@ class ItemColdStartData(RecommenderData):
 
     def _check_state_transition(self):
         assert not self._warm_start
+        assert self._holdout_size != 0 # needed for correct processing of test data
+        assert self._test_ratio > 0
         new_state, update_rule = super(ItemColdStartData, self)._check_state_transition()
 
         # handle change of test_sample value which is not handled
         # in standard state 3 scenario (as there's no testset)
         if '_test_sample' in self._change_properties:
             update_rule['test_update'] = True
-            self._clean_representative_users()
+            self._repr_users = None
         return new_state, update_rule
 
 
@@ -82,13 +75,13 @@ class ItemColdStartData(RecommenderData):
         if self._holdout_size > 0:
             holdout = super(ItemColdStartData, self)._sample_holdout(test_split, group_id=itemid)
         else:
-            holdout = self._data.loc[test_split, [f for f in self.fields if f is not None]]
+            holdout = self._data.loc[test_split, list(self.fields)]
 
         itemid_cold = '{}_cold'.format(itemid)
         return holdout.rename(columns={itemid: itemid_cold}, copy=False)
 
 
-    def _try_drop_unseen_test_items(self, *args, **kwargs):
+    def _try_drop_unseen_test_items(self):
         # there will be no such items except cold-start items
         pass
 
@@ -99,16 +92,13 @@ class ItemColdStartData(RecommenderData):
 
 
     def _assign_test_items_index(self):
-        cold_items_are_initialized = self._test.holdout is not None
-        if self.build_index and cold_items_are_initialized:
+        if self.build_index:
             self._reindex_cold_items()
 
 
     def _reindex_cold_items(self):
         itemid_cold = '{}_cold'.format(self.fields.itemid)
-        holdout = self._test.holdout
-        cold_item_index = self.reindex(
-            holdout, itemid_cold, inplace=True, sort=False)
+        cold_item_index = self.reindex(self._test.holdout, itemid_cold, inplace=True, sort=False)
 
         try: # check if already modified item index to avoid nested assignemnt
             item_index = self.index.itemid.training
@@ -127,12 +117,10 @@ class ItemColdStartData(RecommenderData):
 
     def _post_process_cold_items(self):
         self._clean_representative_users()
-        cold_items_are_initialized = self._test.holdout is not None
-        if cold_items_are_initialized:
-            self._verify_cold_items_representatives()
-            self._verify_cold_items_features()
-            self._try_cleanup_cold_items()
-            self._sort_by_cold_items()
+        self._verify_cold_items_representatives()
+        self._verify_cold_items_features()
+        self._try_cleanup_cold_items()
+        self._sort_by_cold_items()
 
 
     def _clean_representative_users(self):
@@ -160,13 +148,13 @@ class ItemColdStartData(RecommenderData):
 
 
     def _verify_cold_items_features(self):
-        if self.item_features is None:
+        if self.meta_data is None:
             return
 
-        if self.item_features.shape[1] > 1:
-            features_melted = self.item_features.agg(lambda x: [f for l in x for f in l], axis=1)
+        if self.meta_data.shape[1] > 1:
+            features_melted = self.meta_data.agg(lambda x: [f for l in x for f in l], axis=1)
         else:
-            features_melted = self.item_features.iloc[:, 0]
+            features_melted = self.meta_data.iloc[:, 0]
 
         feature_labels = defaultdict(lambda: len(feature_labels))
         labels = features_melted.apply(lambda x: [feature_labels[i] for i in x])
@@ -216,14 +204,6 @@ class ItemColdStartData(RecommenderData):
         holdout = self._test.holdout
         holdout.sort_values(itemid_cold, inplace=True)
 
-    def set_test_data(self, *, holdout, **kwargs):
-        itemid = self.fields.itemid
-        itemid_cold = '{}_cold'.format(itemid)
-        if itemid_cold not in holdout.columns:
-            holdout = holdout.rename(columns={itemid: itemid_cold}, copy=kwargs.pop('copy', True))
-        super().set_test_data(holdout=holdout, copy=False, **kwargs)
-        self._post_process_cold_items()
-
 
 class ColdSimilarityMixin(object):
     @property
@@ -253,7 +233,8 @@ class ColdSimilarityMixin(object):
         return sim_mat[:, seen_idx][cold_idx, :]
 
 
-class ItemColdStartSimilarityData(ColdSimilarityMixin,
-                                  IdentityDiagonalMixin,
-                                  SideRelationsMixin,
-                                  ItemColdStartData): pass
+class ColdStartSimilarityDataModel(ColdSimilarityMixin,
+                                   IdentityDiagonalMixin,
+                                   SideRelationsMixin,
+                                   ItemColdStartData): pass
+
