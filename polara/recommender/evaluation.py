@@ -50,7 +50,7 @@ def matrix_from_observations(observations, key, target, shape, feedback=None):
         data = observations[feedback].values
         dtype = data.dtype
     else:
-        dtype = np.bool
+        dtype = np.bool_
         data = np.ones(n_observations, dtype=dtype)
     # set data and indices manually to avoid index dtype checks
     # and thus prevent possible unnecesssary copies of indices
