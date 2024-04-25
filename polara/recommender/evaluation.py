@@ -79,7 +79,7 @@ def split_positive(eval_matrix, is_positive):
 def generate_hits_data(rank_matrix, eval_matrix_hits, eval_matrix_miss=None):
     # Note: scipy logical operations (OR, XOR, AND) are not supported yet
     # see https://github.com/scipy/scipy/pull/5411
-    dtype = np.bool
+    dtype = np.bool_
     hits_rank = eval_matrix_hits._with_data(eval_matrix_hits.data.astype(dtype, copy=False), copy=False).multiply(rank_matrix)
     miss_rank = None
     if eval_matrix_miss is not None:
